@@ -70,6 +70,41 @@ class EventsState(State):
         self.counter = collections.defaultdict(Counter)
         self.metrics = get_prometheus_metrics()
 
+    def refresh_worker_state(self):
+        if not options.purge_offline_workers:
+            return
+        logger.debug("refresh_worker_state")
+        workers = {}
+        for name, values in self.counter.items():
+            if name not in self.workers:
+                continue
+            worker = self.workers[name]
+            info = dict(values)
+            info.update(status=worker.alive,
+                        heartbeats=worker.heartbeats)
+            workers[name] = info
+
+        timestamp = int(time.time())
+        offline_workers = []
+        for name, info in workers.items():
+            if info.get('status', True):
+                logger.debug("worker[{}] online because its status".format(name))
+                self.metrics.worker_online.labels(name).set(1)
+                continue
+
+            heartbeats = info.get('heartbeats', [])
+            last_heartbeat = int(max(heartbeats)) if heartbeats else None
+            if not last_heartbeat or timestamp - last_heartbeat > options.purge_offline_workers:
+                offline_workers.append(name)
+
+        for name in offline_workers:
+            logger.debug(
+                "worker[{}] offline because heartbeat timeout".format(name))
+            self.metrics.worker_online.labels(name).set(0)
+            logger.debug(
+                "clear current executing tasks for offline worker[{}]".format(name))
+            self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
+
     def event(self, event):
         # Save the event
         super(EventsState, self).event(event)
@@ -124,6 +159,7 @@ class Events(threading.Thread):
 
     def __init__(self, capp, db=None, persistent=False,
                  enable_events=True, io_loop=None, state_save_interval=0,
+                 state_update_interval=0,
                  **kwargs):
         threading.Thread.__init__(self)
         self.daemon = True
@@ -136,6 +172,7 @@ class Events(threading.Thread):
         self.enable_events = enable_events
         self.state = None
         self.state_save_timer = None
+        self.state_update_timer = None
 
         if self.persistent:
             logger.debug("Loading state from '%s'...", self.db)
@@ -154,6 +191,10 @@ class Events(threading.Thread):
         self.timer = PeriodicCallback(self.on_enable_events,
                                       self.events_enable_interval)
 
+        if state_update_interval:
+            self.state_update_timer = PeriodicCallback(self.update_state,
+                                                       state_update_interval)
+
     def start(self):
         threading.Thread.start(self)
         if self.enable_events:
@@ -164,6 +205,10 @@ class Events(threading.Thread):
             logger.debug("Starting state save timer...")
             self.state_save_timer.start()
 
+        if self.state_update_timer:
+            logger.debug("Starting state update timer...")
+            self.state_update_timer.start()
+
     def stop(self):
         if self.enable_events:
             logger.debug("Stopping enable events timer...")
@@ -172,6 +217,10 @@ class Events(threading.Thread):
         if self.state_save_timer:
             logger.debug("Stopping state save timer...")
             self.state_save_timer.stop()
+
+        if self.state_update_timer:
+            logger.debug("Stopping state update timer...")
+            self.state_update_timer.stop()
 
         if self.persistent:
             self.save_state()
@@ -207,6 +256,9 @@ class Events(threading.Thread):
         state = shelve.open(self.db, flag='n')
         state['events'] = self.state
         state.close()
+
+    def update_state(self):
+        self.io_loop.run_in_executor(None, self.state.refresh_worker_state)
 
     def on_enable_events(self):
         # Periodically enable events for workers

@@ -38,6 +38,8 @@ define("persistent", type=bool, default=False,
        help="enable persistent mode")
 define("state_save_interval", type=int, default=0,
        help="state save interval (in milliseconds)")
+define("state_update_interval", type=int, default=0,
+       help="state update interval (in milliseconds)")
 define("broker_api", type=str, default=None,
        help="inspect broker e.g. http://guest:guest@localhost:15672/api/")
 define("ca_certs", type=str, default=None,

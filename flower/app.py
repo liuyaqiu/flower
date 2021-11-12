@@ -59,11 +59,13 @@ class Flower(tornado.web.Application):
 
         self.inspector = Inspector(self.io_loop, self.capp, self.options.inspect_timeout / 1000.0)
 
+        logger.debug('state_update_interval={}'.format(self.options.state_update_interval))
         self.events = events or Events(
             self.capp,
             db=self.options.db,
             persistent=self.options.persistent,
             state_save_interval=self.options.state_save_interval,
+            state_update_interval=self.options.state_update_interval,
             enable_events=self.options.enable_events,
             io_loop=self.io_loop,
             max_workers_in_memory=self.options.max_workers,
