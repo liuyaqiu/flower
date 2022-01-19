@@ -1,4 +1,3 @@
-import os
 import time
 import shelve
 import logging
@@ -70,40 +69,63 @@ class EventsState(State):
         self.counter = collections.defaultdict(Counter)
         self.metrics = get_prometheus_metrics()
 
+    def resize_max_workers(self, max_workers):
+        assert max_workers > 0, max_workers
+        logger.debug(
+            "previous max_workers={}, new max_workers={}".format(
+                self.workers.limit, max_workers))
+        self.workers.limit = max_workers
+        if len(self.workers.data) > self.workers.limit:
+            for _ in range(len(self.workers.data) - self.workers.limit):
+                self.workers.popitem(last=False)
+
+    def resize_max_tasks(self, max_tasks):
+        assert max_tasks > 0, max_tasks
+        logger.debug(
+            "previous max_tasks={}, new max_tasks={}".format(
+                self.tasks.limit, max_tasks))
+        self.tasks.limit = max_tasks
+        if len(self.tasks.data) > self.tasks.limit:
+            index = 0
+            for _ in range(len(self.tasks.data) - self.tasks.limit):
+                index += 1
+                self.tasks.popitem(last=False)
+
     def refresh_worker_state(self):
         if not options.purge_offline_workers:
             return
-        logger.debug("refresh_worker_state")
+        logger.info("refresh_worker_state")
         workers = {}
         for name, values in self.counter.items():
             if name not in self.workers:
                 continue
             worker = self.workers[name]
             info = dict(values)
-            info.update(status=worker.alive,
-                        heartbeats=worker.heartbeats)
+            info.update(self._as_dict(worker))
+            info.update(status=worker.alive)
             workers[name] = info
 
         timestamp = int(time.time())
-        offline_workers = []
-        for name, info in workers.items():
-            if info.get('status', True):
-                logger.debug("worker[{}] online because its status".format(name))
-                self.metrics.worker_online.labels(name).set(1)
-                continue
 
+        def worker_timeout(last_heartbeat, timestamp):
+            return not last_heartbeat or timestamp - last_heartbeat > options.purge_offline_workers
+
+        for name, info in workers.items():
             heartbeats = info.get('heartbeats', [])
             last_heartbeat = int(max(heartbeats)) if heartbeats else None
-            if not last_heartbeat or timestamp - last_heartbeat > options.purge_offline_workers:
-                offline_workers.append(name)
-
-        for name in offline_workers:
-            logger.debug(
-                "worker[{}] offline because heartbeat timeout".format(name))
-            self.metrics.worker_online.labels(name).set(0)
-            logger.debug(
-                "clear current executing tasks for offline worker[{}]".format(name))
-            self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
+            worker_status = info.get('status', True)
+            if worker_timeout(last_heartbeat, timestamp) or not worker_status:
+                logger.info("worker[{}] offline because of delta={} or status={}".format(
+                    timestamp - last_heartbeat if last_heartbeat else None, worker_status
+                ))
+                # If worker is timeout or its status is False, we think it is offline.
+                self.metrics.worker_online.labels(name).set(0)
+                self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
+            else:
+                logger.info("worker[{}] online because of delta={} or status={}").format(
+                    timestamp - last_heartbeat if last_heartbeat else None, worker_status
+                )
+                self.metrics.worker_online.labels(name).set(1)
 
     def event(self, event):
         # Save the event
@@ -180,6 +202,12 @@ class Events(threading.Thread):
             if state:
                 self.state = state['events']
             state.close()
+            max_workers = kwargs.get('max_workers_in_memory')
+            if max_workers and self.state:
+                self.state.resize_max_workers(max_workers)
+            max_tasks = kwargs.get('max_tasks_in_memory')
+            if max_tasks and self.state:
+                self.state.resize_max_tasks(max_tasks)
 
             if state_save_interval:
                 self.state_save_timer = PeriodicCallback(self.save_state,
