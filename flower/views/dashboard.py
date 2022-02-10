@@ -40,20 +40,24 @@ class DashboardView(BaseHandler):
         if options.purge_offline_workers is not None:
             timestamp = int(time.time())
             offline_workers = []
+
+            def worker_timeout(last_heartbeat, timestamp):
+                return not last_heartbeat or abs(timestamp - last_heartbeat) > options.purge_offline_workers
+
             for name, info in workers.items():
+                heartbeats = info.get('heartbeats', [])
+                logger.debug("worker[{}] heartbeats={}".format(name, heartbeats))
                 if info.get('status', True):
-                logger.info("worker[{}] online because its status".format(name))
+                    logger.debug("worker[{}] online because its status".format(name))
                     continue
 
-                heartbeats = info.get('heartbeats', [])
                 last_heartbeat = int(max(heartbeats)) if heartbeats else None
-                if not last_heartbeat or timestamp - last_heartbeat > options.purge_offline_workers:
-                    logger.info("worker[{}] offline because heartbeat timeout".format(name))
+                if worker_timeout(last_heartbeat, timestamp):
+                    logger.debug("worker[{}] offline because heartbeat timeout, last_heartbeat={}, timestamp={}".format(
+                        name, last_heartbeat, timestamp))
                     offline_workers.append(name)
 
             for name in offline_workers:
-                logger.info(
-                    "worker[{}] offline because heartbeat timeout".format(name))
                 workers.pop(name)
 
         if json:

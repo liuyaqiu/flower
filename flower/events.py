@@ -101,30 +101,30 @@ class EventsState(State):
                 continue
             worker = self.workers[name]
             info = dict(values)
-            info.update(self._as_dict(worker))
-            info.update(status=worker.alive)
+            info.update(status=worker.alive,
+                        heartbeats=worker.heartbeats)
             workers[name] = info
 
         timestamp = int(time.time())
 
         def worker_timeout(last_heartbeat, timestamp):
-            return not last_heartbeat or timestamp - last_heartbeat > options.purge_offline_workers
+            return not last_heartbeat or abs(timestamp - last_heartbeat) > options.purge_offline_workers
 
         for name, info in workers.items():
             heartbeats = info.get('heartbeats', [])
             last_heartbeat = int(max(heartbeats)) if heartbeats else None
             worker_status = info.get('status', True)
             if worker_timeout(last_heartbeat, timestamp) or not worker_status:
-                logger.info("worker[{}] offline because of delta={} or status={}".format(
-                    timestamp - last_heartbeat if last_heartbeat else None, worker_status
+                logger.info("worker[{}] offline because of last_heartbeat={}, timestamp={} or status={}".format(
+                    name, last_heartbeat, timestamp, worker_status
                 ))
                 # If worker is timeout or its status is False, we think it is offline.
                 self.metrics.worker_online.labels(name).set(0)
                 self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
             else:
-                logger.info("worker[{}] online because of delta={} or status={}").format(
-                    timestamp - last_heartbeat if last_heartbeat else None, worker_status
-                )
+                logger.info("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
+                    name, last_heartbeat, timestamp, worker_status
+                ))
                 self.metrics.worker_online.labels(name).set(1)
 
     def event(self, event):
