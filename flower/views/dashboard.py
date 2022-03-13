@@ -46,16 +46,15 @@ class DashboardView(BaseHandler):
 
             for name, info in workers.items():
                 heartbeats = info.get('heartbeats', [])
-                logger.debug("worker[{}] heartbeats={}".format(name, heartbeats))
-                if info.get('status', True):
-                    logger.debug("worker[{}] online because its status".format(name))
-                    continue
-
                 last_heartbeat = int(max(heartbeats)) if heartbeats else None
-                if worker_timeout(last_heartbeat, timestamp):
-                    logger.debug("worker[{}] offline because heartbeat timeout, last_heartbeat={}, timestamp={}".format(
-                        name, last_heartbeat, timestamp))
+                worker_status = info.get('status', True)
+                if worker_timeout(last_heartbeat, timestamp) or not worker_status:
+                    logger.debug("worker[{}] offline because heartbeat timeout, last_heartbeat={}, timestamp={}, or status={}".format(
+                        name, last_heartbeat, timestamp, worker_status))
                     offline_workers.append(name)
+                else:
+                    logger.debug("worker[{}] online because heartbeat timeout, last_heartbeat={}, timestamp={}, or status={}".format(
+                        name, last_heartbeat, timestamp, worker_status))
 
             for name in offline_workers:
                 workers.pop(name)
