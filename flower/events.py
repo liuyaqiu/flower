@@ -67,6 +67,7 @@ class EventsState(State):
     def __init__(self, *args, **kwargs):
         super(EventsState, self).__init__(*args, **kwargs)
         self.counter = collections.defaultdict(Counter)
+        self.counter_mutex = threading.Lock()
         self.metrics = get_prometheus_metrics()
 
     def resize_max_workers(self, max_workers):
@@ -96,14 +97,15 @@ class EventsState(State):
             return
         logger.info("refresh_worker_state")
         workers = {}
-        for name, values in self.counter.items():
-            if name not in self.workers:
-                continue
-            worker = self.workers[name]
-            info = dict(values)
-            info.update(status=worker.alive,
-                        heartbeats=worker.heartbeats)
-            workers[name] = info
+        with self.counter_mutex:
+            for name, values in self.counter.items():
+                if name not in self.workers:
+                    continue
+                worker = self.workers[name]
+                info = dict(values)
+                info.update(status=worker.alive,
+                            heartbeats=worker.heartbeats)
+                workers[name] = info
 
         timestamp = int(time.time())
 
@@ -115,14 +117,14 @@ class EventsState(State):
             last_heartbeat = int(max(heartbeats)) if heartbeats else None
             worker_status = info.get('status', True)
             if worker_timeout(last_heartbeat, timestamp) or not worker_status:
-                logger.info("worker[{}] offline because of last_heartbeat={}, timestamp={} or status={}".format(
+                logger.debug("worker[{}] offline because of last_heartbeat={}, timestamp={} or status={}".format(
                     name, last_heartbeat, timestamp, worker_status
                 ))
                 # If worker is timeout or its status is False, we think it is offline.
                 self.metrics.worker_online.labels(name).set(0)
                 self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
             else:
-                logger.info("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
+                logger.debug("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
                     name, last_heartbeat, timestamp, worker_status
                 ))
                 self.metrics.worker_online.labels(name).set(1)
@@ -134,7 +136,8 @@ class EventsState(State):
         worker_name = event['hostname']
         event_type = event['type']
 
-        self.counter[worker_name][event_type] += 1
+        with self.counter_mutex:
+            self.counter[worker_name][event_type] += 1
 
         if event_type.startswith('task-'):
             task_id = event['uuid']
