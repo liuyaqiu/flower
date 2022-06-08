@@ -117,14 +117,14 @@ class EventsState(State):
             last_heartbeat = int(max(heartbeats)) if heartbeats else None
             worker_status = info.get('status', True)
             if worker_timeout(last_heartbeat, timestamp) or not worker_status:
-                logger.debug("worker[{}] offline because of last_heartbeat={}, timestamp={} or status={}".format(
+                logger.info("worker[{}] offline because of last_heartbeat={}, timestamp={} or status={}".format(
                     name, last_heartbeat, timestamp, worker_status
                 ))
                 # If worker is timeout or its status is False, we think it is offline.
                 self.metrics.worker_online.labels(name).set(0)
                 self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
             else:
-                logger.debug("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
+                logger.info("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
                     name, last_heartbeat, timestamp, worker_status
                 ))
                 self.metrics.worker_online.labels(name).set(1)

@@ -28,14 +28,15 @@ class DashboardView(BaseHandler):
                 logger.exception('Failed to update workers: %s', e)
 
         workers = {}
-        for name, values in events.counter.items():
-            if name not in events.workers:
-                continue
-            worker = events.workers[name]
-            info = dict(values)
-            info.update(self._as_dict(worker))
-            info.update(status=worker.alive)
-            workers[name] = info
+        with events.counter_mutex:
+            for name, values in events.counter.items():
+                if name not in events.workers:
+                    continue
+                worker = events.workers[name]
+                info = dict(values)
+                info.update(self._as_dict(worker))
+                info.update(status=worker.alive)
+                workers[name] = info
 
         if options.purge_offline_workers is not None:
             timestamp = int(time.time())

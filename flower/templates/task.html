@@ -82,6 +82,13 @@
                     {% elif name == 'children' %}
                       {% for child in getattr(task, name, {}) %}
                         <a href="{{ reverse_url('task', child.id) }}">{{ child.id }}</a>
+                        {% if child.state == "SUCCESS" %}
+                        <span class="label label-success">{{ child.state }}</span>
+                        {% elif child.state == "FAILURE" %}
+                        <span class="label label-important">{{ child.state }}</span>
+                        {% else %}
+                        <span class="label label-default">{{ child.state }}</span>
+                        {% end %}
                         <br>
                       {% end %}
                     {% else %}
