@@ -9,7 +9,7 @@ from functools import partial
 from tornado.ioloop import IOLoop
 from tornado.ioloop import PeriodicCallback
 
-from celery.events import EventReceiver
+from flower.utils.receiver import CustomEventReceiver
 from celery.events.state import State
 from tornado.options import options
 
@@ -169,6 +169,7 @@ class EventsState(State):
 
         if event_type == 'worker-heartbeat':
             self.metrics.worker_online.labels(worker_name).set(1)
+            logger.debug("worker[{}] heartbeat: {}".format(worker_name, event))
 
             num_executing_tasks = event.get('active')
             if num_executing_tasks is not None:
@@ -263,9 +264,18 @@ class Events(threading.Thread):
                 try_interval *= 2
 
                 with self.capp.connection() as conn:
-                    recv = EventReceiver(conn,
-                                         handlers={"*": self.on_event},
-                                         app=self.capp)
+                    # worker events can be ignored.
+                    recv = CustomEventReceiver(
+                        conn, handlers={"*": self.on_event}, app=self.capp,
+                    )
+                    recv.bind_queue(
+                        options.worker_event_queue, "worker.#",
+                        auto_delete=True, durable=False, no_ack=True,
+                    )
+                    recv.bind_queue(
+                        options.task_event_queue, "task.#",
+                        auto_delete=False, durable=True, no_ack=False,
+                    )
                     try_interval = 1
                     logger.debug("Capturing events...")
                     recv.capture(limit=None, timeout=None, wakeup=True)

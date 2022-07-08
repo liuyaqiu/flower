@@ -72,6 +72,10 @@ define("auth_provider", default='flower.views.auth.GoogleAuth2LoginHandler',
 define("url_prefix", type=str, help="base url prefix")
 define("task_runtime_metric_buckets", type=float, default=Histogram.DEFAULT_BUCKETS,
        multiple=True, help="histogram latency bucket value")
+define("worker_event_queue", type=str, default="flower_worker_ev",
+       help="The queue name of worker events.")
+define("task_event_queue", type=str, default="flower_task_ev",
+       help="The queue name of task events.")
 
 # deprecated options
 define("inspect", default=False, help="inspect workers", type=bool)
