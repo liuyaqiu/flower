@@ -74,8 +74,15 @@ define("task_runtime_metric_buckets", type=float, default=Histogram.DEFAULT_BUCK
        multiple=True, help="histogram latency bucket value")
 define("worker_event_queue", type=str, default="flower_worker_ev",
        help="The queue name of worker events.")
+define("worker_queue_ttl", type=int, default=60000,
+       help="The message ttl milliseconds in worker event queue.")
+define("worker_queue_expires", type=int, default=300000,
+       help="The queue expire milliseconds for worker event queue, when it expires, it will auto-delete.")
 define("task_event_queue", type=str, default="flower_task_ev",
        help="The queue name of task events.")
+# Avoid task event's concurrency performance because of lock.
+define("task_event_prefetch_count", type=int, default=64,
+       help="The prefetch_count of task events.")
 
 # deprecated options
 define("inspect", default=False, help="inspect workers", type=bool)

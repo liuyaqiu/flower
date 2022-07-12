@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class CustomEventReceiver(EventReceiver):
     # You can bind multiple queue rather than one queue for a event receiver.
-    def __init__(self, channel, recoverable_errors=[], **kwargs):
+    def __init__(self, channel, recoverable_errors=[], prefetch_count=0, **kwargs):
         super().__init__(channel, **kwargs)
 
         # Event queue should be durable.
@@ -20,6 +20,7 @@ class CustomEventReceiver(EventReceiver):
         for error in recoverable_errors:
             assert issubclass(error, Exception)
         self.recoverable_errors = recoverable_errors
+        self.prefetch_count = prefetch_count
 
     def bind_queue(self, queue_name, routing_key,
                    auto_delete=True, durable=False,
@@ -43,13 +44,14 @@ class CustomEventReceiver(EventReceiver):
             queues=self.ack_queues,
             callbacks=[self._ack_receive],
             no_ack=False,
-            accept=self.accept
+            accept=self.accept,
+            prefetch_count=self.prefetch_count,
         )
         no_ack_consumer = Consumer(
             queues=self.no_ack_queues,
             callbacks=[self._receive],
             no_ack=True,
-            accept=self.accept
+            accept=self.accept,
         )
         return [ack_consumer, no_ack_consumer]
 

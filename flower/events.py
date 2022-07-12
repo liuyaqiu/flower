@@ -18,6 +18,7 @@ from . import api
 from collections import Counter
 
 from prometheus_client import Counter as PrometheusCounter, Histogram, Gauge
+from readerwriterlock import rwlock
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,8 @@ class EventsState(State):
         self.counter = collections.defaultdict(Counter)
         self.counter_mutex = threading.Lock()
         self.metrics = get_prometheus_metrics()
+        # Lock its state during handling
+        self.lock = rwlock.RWLockFairD()
 
     def resize_max_workers(self, max_workers):
         assert max_workers > 0, max_workers
@@ -124,59 +127,60 @@ class EventsState(State):
                 self.metrics.worker_online.labels(name).set(0)
                 self.metrics.worker_number_of_currently_executing_tasks.labels(name).set(0)
             else:
-                logger.info("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
+                logger.debug("worker[{}] online because of last_heartbeat={}, timestamp={} or status={}".format(
                     name, last_heartbeat, timestamp, worker_status
                 ))
                 self.metrics.worker_online.labels(name).set(1)
 
     def event(self, event):
         # Save the event
-        super(EventsState, self).event(event)
+        with self.lock.gen_rlock():
+            super(EventsState, self).event(event)
 
-        worker_name = event['hostname']
-        event_type = event['type']
+            worker_name = event['hostname']
+            event_type = event['type']
 
-        with self.counter_mutex:
-            self.counter[worker_name][event_type] += 1
+            with self.counter_mutex:
+                self.counter[worker_name][event_type] += 1
 
-        if event_type.startswith('task-'):
-            task_id = event['uuid']
-            task = self.tasks.get(task_id)
-            task_name = event.get('name', '')
-            if not task_name and task_id in self.tasks:
-                task_name = task.name or ''
-            self.metrics.events.labels(worker_name, event_type, task_name).inc()
+            if event_type.startswith('task-'):
+                task_id = event['uuid']
+                task = self.tasks.get(task_id)
+                task_name = event.get('name', '')
+                if not task_name and task_id in self.tasks:
+                    task_name = task.name or ''
+                self.metrics.events.labels(worker_name, event_type, task_name).inc()
 
-            runtime = event.get('runtime', 0)
-            if runtime:
-                self.metrics.runtime.labels(worker_name, task_name).observe(runtime)
+                runtime = event.get('runtime', 0)
+                if runtime:
+                    self.metrics.runtime.labels(worker_name, task_name).observe(runtime)
 
-            task_started = task.started
-            task_received = task.received
+                task_started = task.started
+                task_received = task.received
 
-            if event_type == 'task-received' and not task.eta and task_received:
-                self.metrics.number_of_prefetched_tasks.labels(worker_name, task_name).inc()
+                if event_type == 'task-received' and not task.eta and task_received:
+                    self.metrics.number_of_prefetched_tasks.labels(worker_name, task_name).inc()
 
-            if event_type == 'task-started' and not task.eta and task_started and task_received:
-                self.metrics.prefetch_time.labels(worker_name, task_name).set(task_started - task_received)
-                self.metrics.number_of_prefetched_tasks.labels(worker_name, task_name).dec()
+                if event_type == 'task-started' and not task.eta and task_started and task_received:
+                    self.metrics.prefetch_time.labels(worker_name, task_name).set(task_started - task_received)
+                    self.metrics.number_of_prefetched_tasks.labels(worker_name, task_name).dec()
 
-            if event_type in ['task-succeeded', 'task-failed'] and not task.eta and task_started and task_received:
-                self.metrics.prefetch_time.labels(worker_name, task_name).set(0)
+                if event_type in ['task-succeeded', 'task-failed'] and not task.eta and task_started and task_received:
+                    self.metrics.prefetch_time.labels(worker_name, task_name).set(0)
 
-        if event_type == 'worker-online':
-            self.metrics.worker_online.labels(worker_name).set(1)
+            if event_type == 'worker-online':
+                self.metrics.worker_online.labels(worker_name).set(1)
 
-        if event_type == 'worker-heartbeat':
-            self.metrics.worker_online.labels(worker_name).set(1)
-            logger.debug("worker[{}] heartbeat: {}".format(worker_name, event))
+            if event_type == 'worker-heartbeat':
+                self.metrics.worker_online.labels(worker_name).set(1)
+                logger.debug("worker[{}] heartbeat: {}".format(worker_name, event))
 
-            num_executing_tasks = event.get('active')
-            if num_executing_tasks is not None:
-                self.metrics.worker_number_of_currently_executing_tasks.labels(worker_name).set(num_executing_tasks)
+                num_executing_tasks = event.get('active')
+                if num_executing_tasks is not None:
+                    self.metrics.worker_number_of_currently_executing_tasks.labels(worker_name).set(num_executing_tasks)
 
-        if event_type == 'worker-offline':
-            self.metrics.worker_online.labels(worker_name).set(0)
+            if event_type == 'worker-offline':
+                self.metrics.worker_online.labels(worker_name).set(0)
 
 
 
@@ -267,9 +271,12 @@ class Events(threading.Thread):
                     # worker events can be ignored.
                     recv = CustomEventReceiver(
                         conn, handlers={"*": self.on_event}, app=self.capp,
+                        prefetch_count=options.task_event_prefetch_count,
                     )
                     recv.bind_queue(
                         options.worker_event_queue, "worker.#",
+                        queue_ttl=options.worker_queue_ttl,
+                        queue_expires=options.worker_queue_expires,
                         auto_delete=True, durable=False, no_ack=True,
                     )
                     recv.bind_queue(
@@ -293,10 +300,12 @@ class Events(threading.Thread):
                 time.sleep(try_interval)
 
     def save_state(self):
-        logger.debug("Saving state to '%s'...", self.db)
-        state = shelve.open(self.db, flag='n')
-        state['events'] = self.state
-        state.close()
+        logger.info("Saving state to '%s'...", self.db)
+        shelve_state = shelve.open(self.db, flag='n')
+        with self.state.lock.gen_wlock():
+            shelve_state['events'] = self.state
+        shelve_state.close()
+        logger.info("Saving state done")
 
     def update_state(self):
         self.io_loop.run_in_executor(None, self.state.refresh_worker_state)
