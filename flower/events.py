@@ -259,7 +259,7 @@ class Events(threading.Thread):
             self.state_update_timer.stop()
 
         if self.persistent:
-            self.save_state()
+            self.dump_state()
 
     def run(self):
         try_interval = 1
@@ -299,13 +299,16 @@ class Events(threading.Thread):
                 logger.debug(e, exc_info=True)
                 time.sleep(try_interval)
 
-    def save_state(self):
+    def dump_state(self):
         logger.info("Saving state to '%s'...", self.db)
         shelve_state = shelve.open(self.db, flag='n')
         with self.state.lock.gen_wlock():
             shelve_state['events'] = self.state
         shelve_state.close()
-        logger.info("Saving state done")
+        logger.info("Saving state done.")
+
+    def save_state(self):
+        self.io_loop.run_in_executor(None, self.dump_state)
 
     def update_state(self):
         self.io_loop.run_in_executor(None, self.state.refresh_worker_state)
