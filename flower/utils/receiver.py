@@ -17,6 +17,7 @@ class CustomEventReceiver(EventReceiver):
         self.ack_queues = []
         self.no_ack_queues = []
         assert isinstance(recoverable_errors, (list, tuple))
+        recoverable_errors = tuple(recoverable_errors)
         for error in recoverable_errors:
             assert issubclass(error, Exception)
         self.recoverable_errors = recoverable_errors

@@ -149,6 +149,9 @@ class EventsState(State):
                 task_name = event.get('name', '')
                 if not task_name and task_id in self.tasks:
                     task_name = task.name or ''
+                # Ignore the task-sent worker name.
+                if event_type == 'task-sent':
+                    worker_name = ''
                 self.metrics.events.labels(worker_name, event_type, task_name).inc()
 
                 runtime = event.get('runtime', 0)
